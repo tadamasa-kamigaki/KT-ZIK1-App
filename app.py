@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, url_for
+from flask import Flask, request, redirect, url_for, render_template_string
 import os
 import sqlite3
 
@@ -22,56 +22,115 @@ def init_db():
         conn.commit()
         conn.close()
 
+# ホーム画面
 @app.route('/')
 def home():
-    return '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>KT-ZIK1 Test Page</title>
-    </head>
-    <body>
-        <h1>Welcome to KT-ZIK1 Web Application!</h1>
-        <a href="/send-form">Send Data</a><br>
-        <a href="/view-data">View Data</a>
-    </body>
-    </html>
-    '''
+    user_agent = request.headers.get('User-Agent', '').lower()
+    is_iphone13 = 'iphone' in user_agent and '13' in user_agent
 
-@app.route('/send-form', methods=['GET', 'POST'])
-def send_form():
-    if request.method == 'POST':
-        content = request.form.get('content', '')
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO data (content, created_at) VALUES (?, datetime("now"))', (content,))
-        conn.commit()
-        conn.close()
-        return redirect('/')
-    return '''
+    # UI調整: PCとiPhone13でレイアウトを変更
+    if is_iphone13:
+        ui_style = '''
+            body { font-family: Arial, sans-serif; text-align: center; margin: 20px; }
+            input { width: 90%; padding: 10px; margin-bottom: 10px; }
+            button { width: 90%; padding: 10px; }
+        '''
+    else:
+        ui_style = '''
+            body { font-family: Arial, sans-serif; text-align: center; margin: 100px auto; width: 60%; }
+            input { width: 80%; padding: 15px; margin-bottom: 15px; font-size: 1.2rem; }
+            button { width: 40%; padding: 15px; font-size: 1.2rem; }
+        '''
+
+    # 言語選択
+    language = request.args.get('lang', 'ja')
+    if language == 'hi':
+        title = "डेटा प्रबंधन"
+        send_button = "भेजें"
+        view_data_link = "डेटा देखें"
+    else:
+        title = "データ管理"
+        send_button = "送信"
+        view_data_link = "データを見る"
+
+    return render_template_string(f'''
     <!DOCTYPE html>
-    <html>
+    <html lang="{language}">
     <head>
-        <title>Send Data</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{title}</title>
+        <style>
+            {ui_style}
+            select {{ margin: 10px; padding: 5px; }}
+        </style>
     </head>
     <body>
-        <form method="POST">
-            <label for="content">Content:</label>
-            <input type="text" id="content" name="content">
-            <button type="submit">Submit</button>
+        <form method="GET" style="text-align: right;">
+            <label for="lang">言語選択:</label>
+            <select name="lang" id="lang" onchange="this.form.submit()">
+                <option value="ja" {"selected" if language == "ja" else ""}>日本語</option>
+                <option value="hi" {"selected" if language == "hi" else ""}>हिन्दी</option>
+            </select>
         </form>
+        <h1>{title}</h1>
+        <form action="/submit-data" method="POST">
+            <input type="text" name="content" placeholder="データを入力" required>
+            <br>
+            <button type="submit">{send_button}</button>
+        </form>
+        <br>
+        <a href="/view-data?lang={language}">{view_data_link}</a>
     </body>
     </html>
-    '''
+    ''')
 
+# データの送信
+@app.route('/submit-data', methods=['POST'])
+def submit_data():
+    content = request.form.get('content')
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO data (content, created_at) VALUES (?, datetime("now"))', (content,))
+    conn.commit()
+    conn.close()
+    return redirect('/')
+
+# データ閲覧
 @app.route('/view-data')
 def view_data():
+    language = request.args.get('lang', 'ja')
+    if language == 'hi':
+        title = "डेटा देखें"
+    else:
+        title = "データを見る"
+
     conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     cursor.execute('SELECT id, content, created_at FROM data')
     rows = cursor.fetchall()
     conn.close()
-    return '<br>'.join(f'{row[0]}: {row[1]} ({row[2]})' for row in rows)
+
+    return render_template_string(f'''
+    <!DOCTYPE html>
+    <html lang="{language}">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{title}</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; text-align: center; margin: 100px auto; width: 60%; }}
+        </style>
+    </head>
+    <body>
+        <h1>{title}</h1>
+        <ul>
+            {''.join(f'<li>{row[1]} ({row[2]})</li>' for row in rows)}
+        </ul>
+        <a href="/">戻る</a>
+    </body>
+    </html>
+    ''')
 
 if __name__ == '__main__':
     init_db()
