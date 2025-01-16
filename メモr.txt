@@ -1,0 +1,3 @@
+cd "C:\Users\tadamasa\OneDrive\デスクトップ\my_server"
+
+python app.py
