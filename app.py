@@ -1,11 +1,12 @@
-from flask import Flask, request, redirect, url_for, render_template_string
+from flask import Flask, request, redirect, url_for, render_template_string, jsonify
 import os
 import sqlite3
+import traceback
 
 app = Flask(__name__)
 
 # データベースの保存場所
-DATABASE_PATH = "data.db"
+DATABASE_PATH = "inventory.db"
 
 # データベース初期化
 def init_db():
@@ -13,124 +14,150 @@ def init_db():
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS data (
+            CREATE TABLE IF NOT EXISTS inventory (
                 id INTEGER PRIMARY KEY,
-                content TEXT,
-                created_at TEXT
+                item_name TEXT NOT NULL,
+                quantity INTEGER NOT NULL,
+                operation TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS stock (
+                item_name TEXT PRIMARY KEY,
+                total_quantity INTEGER NOT NULL
             )
         ''')
         conn.commit()
         conn.close()
 
-# ホーム画面
 @app.route('/')
 def home():
-    user_agent = request.headers.get('User-Agent', '').lower()
-    is_iphone13 = 'iphone' in user_agent and '13' in user_agent
-
-    # UI調整: PCとiPhone13でレイアウトを変更
-    if is_iphone13:
-        ui_style = '''
-            body { font-family: Arial, sans-serif; text-align: center; margin: 20px; }
-            input { width: 90%; padding: 10px; margin-bottom: 10px; }
-            button { width: 90%; padding: 10px; }
-        '''
-    else:
-        ui_style = '''
-            body { font-family: Arial, sans-serif; text-align: center; margin: 100px auto; width: 60%; }
-            input { width: 80%; padding: 15px; margin-bottom: 15px; font-size: 1.2rem; }
-            button { width: 40%; padding: 15px; font-size: 1.2rem; }
-        '''
-
-    # 言語選択
-    language = request.args.get('lang', 'ja')
-    if language == 'hi':
-        title = "डेटा प्रबंधन"
-        send_button = "भेजें"
-        view_data_link = "डेटा देखें"
-    else:
-        title = "データ管理"
-        send_button = "送信"
-        view_data_link = "データを見る"
-
-    return render_template_string(f'''
+    return render_template_string('''
     <!DOCTYPE html>
-    <html lang="{language}">
+    <html lang="ja">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{title}</title>
+        <title>在庫管理アプリ</title>
         <style>
-            {ui_style}
-            select {{ margin: 10px; padding: 5px; }}
+            body { font-family: Arial, sans-serif; text-align: center; margin: 20px; }
+            input, button { margin: 10px; padding: 10px; width: 80%; }
+            button { background-color: #007BFF; color: white; border: none; border-radius: 5px; }
+            button:hover { background-color: #0056b3; }
         </style>
     </head>
     <body>
-        <form method="GET" style="text-align: right;">
-            <label for="lang">言語選択:</label>
-            <select name="lang" id="lang" onchange="this.form.submit()">
-                <option value="ja" {"selected" if language == "ja" else ""}>日本語</option>
-                <option value="hi" {"selected" if language == "hi" else ""}>हिन्दी</option>
-            </select>
-        </form>
-        <h1>{title}</h1>
+        <h1>在庫管理アプリ</h1>
         <form action="/submit-data" method="POST">
-            <input type="text" name="content" placeholder="データを入力" required>
-            <br>
-            <button type="submit">{send_button}</button>
+            <input type="text" name="item_name" placeholder="品目名を入力" required>
+            <input type="number" name="quantity" placeholder="数量を入力" required>
+            <button type="submit" name="operation" value="入庫">入庫</button>
+            <button type="submit" name="operation" value="出庫">出庫</button>
         </form>
         <br>
-        <a href="/view-data?lang={language}">{view_data_link}</a>
+        <a href="/view-data">データを見る</a>
     </body>
     </html>
     ''')
 
-# データの送信
 @app.route('/submit-data', methods=['POST'])
 def submit_data():
-    content = request.form.get('content')
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    cursor.execute('INSERT INTO data (content, created_at) VALUES (?, datetime("now"))', (content,))
-    conn.commit()
-    conn.close()
+    item_name = request.form.get('item_name')
+    quantity = int(request.form.get('quantity'))
+    operation = request.form.get('operation')
+
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        if operation == '入庫':
+            cursor.execute('''
+                INSERT INTO inventory (item_name, quantity, operation) 
+                VALUES (?, ?, ?)
+            ''', (item_name, quantity, operation))
+            cursor.execute('''
+                INSERT INTO stock (item_name, total_quantity)
+                VALUES (?, ?)
+                ON CONFLICT(item_name) DO UPDATE SET total_quantity = total_quantity + ?
+            ''', (item_name, quantity, quantity))
+        elif operation == '出庫':
+            cursor.execute('''
+                INSERT INTO inventory (item_name, quantity, operation) 
+                VALUES (?, ?, ?)
+            ''', (item_name, -quantity, operation))
+            cursor.execute('''
+                INSERT INTO stock (item_name, total_quantity)
+                VALUES (?, ?)
+                ON CONFLICT(item_name) DO UPDATE SET total_quantity = total_quantity - ?
+            ''', (item_name, -quantity, quantity))
+
+        conn.commit()
+    except Exception as e:
+        print("データ送信エラー:", traceback.format_exc())
+        return f"エラー: {e}", 500
+    finally:
+        conn.close()
+
     return redirect('/')
 
-# データ閲覧
 @app.route('/view-data')
 def view_data():
-    language = request.args.get('lang', 'ja')
-    if language == 'hi':
-        title = "डेटा देखें"
-    else:
-        title = "データを見る"
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT item_name, quantity, operation, created_at FROM inventory')
+        inventory_data = cursor.fetchall()
 
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, content, created_at FROM data')
-    rows = cursor.fetchall()
-    conn.close()
+        cursor.execute('SELECT item_name, total_quantity FROM stock')
+        stock_data = cursor.fetchall()
+    except Exception as e:
+        print("データビューエラー:", traceback.format_exc())
+        return f"エラー: {e}", 500
+    finally:
+        conn.close()
 
-    return render_template_string(f'''
+    return render_template_string('''
     <!DOCTYPE html>
-    <html lang="{language}">
+    <html lang="ja">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{title}</title>
+        <title>データを見る</title>
         <style>
-            body {{ font-family: Arial, sans-serif; text-align: center; margin: 100px auto; width: 60%; }}
+            body { font-family: Arial, sans-serif; text-align: center; margin: 50px auto; width: 80%; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+            th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+            th { background-color: #f2f2f2; }
         </style>
     </head>
     <body>
-        <h1>{title}</h1>
-        <ul>
-            {''.join(f'<li>{row[1]} ({row[2]})</li>' for row in rows)}
-        </ul>
+        <h1>履歴データ</h1>
+        <table>
+            <tr>
+                <th>品目名</th>
+                <th>数量</th>
+                <th>操作</th>
+                <th>日時</th>
+            </tr>
+            {% for row in inventory_data %}
+            <tr><td>{{ row[0] }}</td><td>{{ row[1] }}</td><td>{{ row[2] }}</td><td>{{ row[3] }}</td></tr>
+            {% endfor %}
+        </table>
+        <h1>現在の在庫</h1>
+        <table>
+            <tr>
+                <th>品目名</th>
+                <th>合計数量</th>
+            </tr>
+            {% for row in stock_data %}
+            <tr><td>{{ row[0] }}</td><td>{{ row[1] }}</td></tr>
+            {% endfor %}
+        </table>
         <a href="/">戻る</a>
     </body>
     </html>
-    ''')
+    ''', inventory_data=inventory_data, stock_data=stock_data)
 
 if __name__ == '__main__':
     init_db()
