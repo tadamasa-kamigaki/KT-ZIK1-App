@@ -5,7 +5,7 @@ import sqlite3
 app = Flask(__name__)
 
 # データベースの保存場所
-DATABASE_PATH = "/var/www/KT-ZIK1/data.db"
+DATABASE_PATH = "data.db"
 
 # データベース初期化
 def init_db():
